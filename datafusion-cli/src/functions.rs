@@ -31,6 +31,7 @@ use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use async_trait::async_trait;
 use datafusion::catalog::{Session, TableFunctionImpl};
 use datafusion::common::{Column, plan_err};
 use datafusion::datasource::TableProvider;
@@ -325,8 +326,9 @@ fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<Str
 #[derive(Debug)]
 pub struct ParquetMetadataFunc {}
 
+#[async_trait]
 impl TableFunctionImpl for ParquetMetadataFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let filename = match exprs.first() {
             Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) => s, // single quote: parquet_metadata('x.parquet')
             Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
@@ -516,8 +518,9 @@ impl MetadataCacheFunc {
     }
 }
 
+#[async_trait]
 impl TableFunctionImpl for MetadataCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         if !exprs.is_empty() {
             return plan_err!("metadata_cache should have no arguments");
         }
@@ -634,8 +637,9 @@ impl StatisticsCacheFunc {
     }
 }
 
+#[async_trait]
 impl TableFunctionImpl for StatisticsCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         if !exprs.is_empty() {
             return plan_err!("statistics_cache should have no arguments");
         }
@@ -769,8 +773,9 @@ impl ListFilesCacheFunc {
     }
 }
 
+#[async_trait]
 impl TableFunctionImpl for ListFilesCacheFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         if !exprs.is_empty() {
             return plan_err!("list_files_cache should have no arguments");
         }

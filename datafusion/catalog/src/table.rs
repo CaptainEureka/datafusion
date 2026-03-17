@@ -508,9 +508,10 @@ pub trait TableProviderFactory: Debug + Sync + Send {
 }
 
 /// A trait for table function implementations
-pub trait TableFunctionImpl: Debug + Sync + Send + Any {
+#[async_trait]
+pub trait TableFunctionImpl: Debug + Sync + Send {
     /// Create a table provider
-    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
+    async fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
 }
 
 /// A table that uses a function to generate data
@@ -539,7 +540,10 @@ impl TableFunction {
     }
 
     /// Get the function implementation and generate a table
-    pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        self.fun.call(args)
+    pub async fn create_table_provider(
+        &self,
+        args: &[Expr],
+    ) -> Result<Arc<dyn TableProvider>> {
+        self.fun.call(args).await
     }
 }

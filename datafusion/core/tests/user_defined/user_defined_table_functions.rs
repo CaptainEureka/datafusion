@@ -199,8 +199,9 @@ impl SimpleCsvTable {
 #[derive(Debug)]
 struct SimpleCsvTableFunc {}
 
+#[async_trait]
 impl TableFunctionImpl for SimpleCsvTableFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let mut new_exprs = vec![];
         let mut filepath = String::new();
         for expr in exprs {
@@ -230,8 +231,9 @@ async fn test_udtf_type_coercion() -> Result<()> {
     #[derive(Debug)]
     struct NoOpTableFunc;
 
+    #[async_trait]
     impl TableFunctionImpl for NoOpTableFunc {
-        fn call(&self, _: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        async fn call(&self, _: &[Expr]) -> Result<Arc<dyn TableProvider>> {
             let schema = Arc::new(arrow::datatypes::Schema::empty());
             Ok(Arc::new(MemTable::try_new(schema, vec![vec![]])?))
         }
@@ -242,6 +244,60 @@ async fn test_udtf_type_coercion() -> Result<()> {
 
     // This should not panic - the array elements should be coerced to Float64
     let _ = ctx.sql("SELECT * FROM f(ARRAY[0.1, 1, 2])").await?;
+
+    Ok(())
+}
+
+/// Test that a UDTF whose `call` method genuinely awaits an async operation works end-to-end.
+/// This validates the `std::thread::spawn` + `Handle::block_on` bridge in `session_state.rs`.
+#[tokio::test]
+async fn test_async_udtf_call() -> Result<()> {
+    use datafusion::datasource::MemTable;
+    use std::sync::Mutex;
+    use tokio::sync::oneshot;
+
+    // Sender is stored in the func so the test can resolve it after registration.
+    struct AsyncSchemaFunc {
+        // Option so we can take the sender out on first call.
+        sender: Mutex<Option<oneshot::Sender<()>>>,
+        receiver: Mutex<Option<oneshot::Receiver<()>>>,
+    }
+
+    #[async_trait]
+    impl TableFunctionImpl for AsyncSchemaFunc {
+        async fn call(&self, _: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+            // Wait for the signal — proves this future genuinely suspends.
+            let rx = self.receiver.lock().unwrap().take();
+            if let Some(rx) = rx {
+                rx.await.ok();
+            }
+            let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+                arrow::datatypes::Field::new("value", arrow::datatypes::DataType::Int32, false),
+            ]));
+            Ok(Arc::new(MemTable::try_new(schema, vec![vec![]])?))
+        }
+    }
+
+    impl std::fmt::Debug for AsyncSchemaFunc {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("AsyncSchemaFunc").finish()
+        }
+    }
+
+    let (tx, rx) = oneshot::channel::<()>();
+    let func = Arc::new(AsyncSchemaFunc {
+        sender: Mutex::new(Some(tx)),
+        receiver: Mutex::new(Some(rx)),
+    });
+
+    // Fire the sender before the query so the UDTF's await resolves immediately.
+    func.sender.lock().unwrap().take().unwrap().send(()).ok();
+
+    let ctx = SessionContext::new();
+    ctx.register_udtf("async_udtf", func);
+
+    let result = ctx.sql("SELECT * FROM async_udtf()").await?.collect().await?;
+    assert_eq!(result.len(), 0, "expected empty result from async UDTF");
 
     Ok(())
 }

@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RResult, RVec};
+use async_trait::async_trait;
 use datafusion_catalog::{TableFunctionImpl, TableProvider};
 use datafusion_common::error::Result;
 use datafusion_execution::TaskContext;
@@ -107,11 +108,31 @@ unsafe extern "C" fn call_fn_wrapper(
         codec.as_ref()
     ));
 
-    let table_provider = rresult_return!(udtf_inner.call(&args));
+    let table_provider = match runtime {
+        Some(handle) => rresult_return!(handle.block_on(udtf_inner.call(&args))),
+        None => {
+            let handle = rresult_return!(Handle::try_current().map_err(|e| {
+                datafusion_common::DataFusionError::Execution(format!(
+                    "no tokio runtime available for UDTF call: {e}"
+                ))
+            }));
+            let udtf_inner = Arc::clone(udtf_inner);
+            rresult_return!(std::thread::spawn(move || {
+                handle.block_on(udtf_inner.call(&args))
+            })
+            .join()
+            .map_err(|e| {
+                datafusion_common::DataFusionError::Execution(format!(
+                    "UDTF thread panicked: {e:?}"
+                ))
+            })
+            .and_then(|r| r))
+        }
+    };
     RResult::ROk(FFI_TableProvider::new_with_ffi_codec(
         table_provider,
         false,
-        runtime,
+        udtf.runtime(),
         udtf.logical_codec.clone(),
     ))
 }
@@ -214,8 +235,9 @@ impl From<FFI_TableFunction> for Arc<dyn TableFunctionImpl> {
     }
 }
 
+#[async_trait]
 impl TableFunctionImpl for ForeignTableFunction {
-    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
         let expr_list = LogicalExprList {
             expr: serialize_exprs(args, codec.as_ref())?,
@@ -249,8 +271,9 @@ mod tests {
     #[derive(Debug)]
     struct TestUDTF {}
 
+    #[async_trait]
     impl TableFunctionImpl for TestUDTF {
-        fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        async fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
             let args = args
                 .iter()
                 .map(|arg| {
@@ -341,7 +364,9 @@ mod tests {
 
         let foreign_udf: Arc<dyn TableFunctionImpl> = local_udtf.into();
 
-        let table = foreign_udf.call(&[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
+        let table = foreign_udf
+            .call(&[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])
+            .await?;
 
         let _ = ctx.register_table("test-table", table)?;
 

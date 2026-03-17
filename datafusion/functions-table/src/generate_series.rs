@@ -478,8 +478,9 @@ struct GenerateSeriesFuncImpl {
     include_end: bool,
 }
 
+#[async_trait]
 impl TableFunctionImpl for GenerateSeriesFuncImpl {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         if exprs.is_empty() || exprs.len() > 3 {
             return plan_err!("{} function requires 1 to 3 arguments", self.name);
         }
@@ -736,26 +737,28 @@ impl GenerateSeriesFuncImpl {
 #[derive(Debug)]
 pub struct GenerateSeriesFunc {}
 
+#[async_trait]
 impl TableFunctionImpl for GenerateSeriesFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let impl_func = GenerateSeriesFuncImpl {
             name: "generate_series",
             include_end: true,
         };
-        impl_func.call(exprs)
+        impl_func.call(exprs).await
     }
 }
 
 #[derive(Debug)]
 pub struct RangeFunc {}
 
+#[async_trait]
 impl TableFunctionImpl for RangeFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    async fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let impl_func = GenerateSeriesFuncImpl {
             name: "range",
             include_end: false,
         };
-        impl_func.call(exprs)
+        impl_func.call(exprs).await
     }
 }
 

@@ -1852,7 +1852,16 @@ impl ContextProvider for SessionContextProvider<'_> {
                     .and_then(|e| simplifier.simplify(e))
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
-        let provider = tbl_func.create_table_provider(&args)?;
+        let handle = tokio::runtime::Handle::current();
+        let provider = std::thread::spawn(move || {
+            handle.block_on(tbl_func.create_table_provider(&args))
+        })
+        .join()
+        .map_err(|e| {
+            DataFusionError::Execution(format!(
+                "table function thread panicked: {e:?}"
+            ))
+        })??;
 
         Ok(provider_as_source(provider))
     }
